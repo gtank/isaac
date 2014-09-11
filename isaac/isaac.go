@@ -8,7 +8,12 @@ isaac.go: an implementation of Bob Jenkins' random number generator ISAAC based 
 
 package isaac
 
-type isaac struct {
+import (
+	"bytes"
+	"encoding/binary"
+)
+
+type ISAAC struct {
 	/* external results */
 	randrsl [256]uint32
 	randcnt uint32
@@ -18,41 +23,35 @@ type isaac struct {
 	aa, bb, cc uint32
 }
 
-func (r *isaac) isaac() {
-	var x, y uint32
-
-	r.cc++       /* cc just gets incremented once per 256 results */
-	r.bb += r.cc /* then combined with bb                         */
+func (r *ISAAC) isaac() {
+	r.cc = r.cc + 1    /* cc just gets incremented once per 256 results */
+	r.bb = r.bb + r.cc /* then combined with bb */
 
 	for i := 0; i < 256; i++ {
-		x = r.mm[i]
-
+		x := r.mm[i]
 		switch i % 4 {
 		case 0:
-			r.aa ^= (r.aa << 13)
+			r.aa = r.aa ^ (r.aa << 13)
 		case 1:
-			r.aa ^= (r.aa >> 6)
+			r.aa = r.aa ^ (r.aa >> 6)
 		case 2:
-			r.aa ^= (r.aa << 2)
+			r.aa = r.aa ^ (r.aa << 2)
 		case 3:
-			r.aa ^= (r.aa >> 16)
+			r.aa = r.aa ^ (r.aa >> 16)
 		}
-
 		r.aa = r.mm[(i+128)%256] + r.aa
-		y = r.mm[(x>>2)%256] + r.aa + r.bb
-		r.bb = r.mm[(y>>10)%256] + x
-
+		y := r.mm[(x>>2)%256] + r.aa + r.bb
 		r.mm[i] = y
+		r.bb = r.mm[(y>>10)%256] + x
 		r.randrsl[i] = r.bb
-
-		/* Note that bits 2..9 are chosen from x but 10..17 are chosen
-		   from y.  The only important thing here is that 2..9 and 10..17
-		   don't overlap.  2..9 and 10..17 were then chosen for speed in
-		   the optimized version (rand.c) */
-		/* See http://burtleburtle.net/bob/rand/isaac.html
-		   for further explanations and analysis. */
-
 	}
+
+	/* Note that bits 2..9 are chosen from x but 10..17 are chosen
+	   from y.  The only important thing here is that 2..9 and 10..17
+	   don't overlap.  2..9 and 10..17 were then chosen for speed in
+	   the optimized version (rand.c) */
+	/* See http://burtleburtle.net/bob/rand/isaac.html
+	   for further explanations and analysis. */
 }
 
 func mix(a, b, c, d, e, f, g, h uint32) (uint32, uint32, uint32, uint32, uint32, uint32, uint32, uint32) {
@@ -84,7 +83,7 @@ func mix(a, b, c, d, e, f, g, h uint32) (uint32, uint32, uint32, uint32, uint32,
 }
 
 /* if (flag==true), then use the contents of randrsl[] to initialize mm[]. */
-func (r *isaac) randInit(flag bool) {
+func (r *ISAAC) randInit(flag bool) {
 	var a, b, c, d, e, f, g, h uint32
 	a, b, c, d, e, f, g, h = 0x9e3779b9, 0x9e3779b9, 0x9e3779b9, 0x9e3779b9, 0x9e3779b9, 0x9e3779b9, 0x9e3779b9, 0x9e3779b9
 
@@ -136,30 +135,47 @@ func (r *isaac) randInit(flag bool) {
 		}
 	}
 
-	r.isaac()     /* fill in the first set of results */
-	r.randcnt = 0 /* reset the counter */
+	r.isaac()       /* fill in the first set of results */
+	r.randcnt = 256 /* reset the counter for the first set of results */
 }
 
-/* there is no official method for doing this, but just writing the key to the
- * state array is how the demo code does it */
-func (r *isaac) Seed(key string) {
-	for idx, c := range key {
-		if idx == len(r.randrsl) {
+/* there is no official method for doing this
+ * the challenge code just memcpys the string to the top of the output array
+ * and this is the best equivalent I could come up with in Go */
+func (r *ISAAC) Seed(key string) {
+	keyBuf := bytes.NewBuffer([]byte(key))
+
+	// this padding should be equivalent to the behavior of memcpy-ing a shorter string
+	// into a zeroed output array (per randtest.c)
+	var padding = 0
+	if keyBuf.Len()%4 != 0 {
+		padding = 4 - (keyBuf.Len() % 4)
+	}
+	for i := 0; i < padding; i++ {
+		keyBuf.WriteByte(0x00)
+	}
+
+	var count = keyBuf.Len() / 4 // separate counter since keyBuf is being consumed
+	for i := 0; i < count; i++ {
+		if i == len(r.randrsl) {
 			break
 		}
-		r.randrsl[idx] = uint32(c)
-		r.randInit(true)
+
+		var num uint32
+		if err := binary.Read(keyBuf, binary.LittleEndian, &num); err == nil {
+			r.randrsl[i] = num
+		}
 	}
+	r.randInit(true)
 }
 
 /* retrieve the next number in the sequence */
-func (r *isaac) Rand() uint32 {
-	rnd := r.randrsl[r.randcnt]
-	r.randcnt++
-	if r.randcnt == uint32(len(r.randrsl)) {
-		// reset for another 256
+func (r *ISAAC) Rand() (number uint32) {
+	r.randcnt--
+	number = r.randrsl[r.randcnt]
+	if r.randcnt == 0 {
 		r.isaac()
-		r.randcnt = 0
+		r.randcnt = 256
 	}
-	return rnd
+	return number
 }
