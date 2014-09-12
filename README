@@ -1,0 +1,9 @@
+This is a mildly ported version of Bob Jenkins' ISAAC, a fast 32-bit CSPRNG.
+
+More information on the algorithm can be found at
+http://www.burtleburtle.net/bob/rand/isaacafa.html
+
+The code emits a stream of random uint32 and also supports Go's
+crypto/cipher.Stream interface. Its output matches the official test vectors
+for ISAAC, but I can't make any guarantees about the cryptographic qualities of
+this code (especially the stream mode). Use at your own risk.
